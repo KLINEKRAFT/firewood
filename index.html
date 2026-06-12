@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="description" content="Split firewood in 3D. A KLINEKRAFT screen toy." />
+<title>FIREWOOD — KLINEKRAFT</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #06090c;
+    --ink: #d7dee4;
+    --dim: #5a6770;
+    --accent: #6ea4c4;
+    --hairline: rgba(215, 222, 228, 0.14);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: var(--bg); }
+  body { font-family: 'IBM Plex Mono', monospace; color: var(--ink); }
+  canvas { display: block; }
+
+  .hud { position: fixed; z-index: 10; user-select: none; -webkit-user-select: none; }
+
+  .hud-top {
+    top: 0; left: 0; right: 0;
+    display: flex; justify-content: space-between; align-items: flex-start;
+    padding: 18px 22px;
+    pointer-events: none;
+  }
+  .title-block .name {
+    font-size: 13px; font-weight: 500; letter-spacing: 0.28em; color: var(--ink);
+  }
+  .title-block .sub {
+    margin-top: 4px; font-size: 10px; letter-spacing: 0.18em; color: var(--dim);
+  }
+  .counter { text-align: right; }
+  .counter .label { font-size: 10px; letter-spacing: 0.22em; color: var(--dim); }
+  .counter .value {
+    margin-top: 3px; font-size: 22px; font-weight: 500;
+    letter-spacing: 0.12em; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+    transition: color 120ms linear;
+  }
+  .counter .value.flash { color: var(--accent); }
+
+  .hint {
+    bottom: 64px; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 14px;
+    font-size: 10px; letter-spacing: 0.2em; color: var(--dim);
+    padding: 10px 18px;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    background: rgba(6, 9, 12, 0.55);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    pointer-events: none;
+    opacity: 0; transition: opacity 600ms ease;
+    white-space: nowrap;
+  }
+  .hint.show { opacity: 1; }
+  .hint .accent { color: var(--accent); }
+  .hint .sep { color: var(--hairline); }
+
+  .brand {
+    bottom: 18px; right: 22px;
+    opacity: 0.28; pointer-events: none;
+  }
+  .brand img { display: block; height: 16px; width: auto; }
+
+  #loading {
+    position: fixed; inset: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--bg);
+    transition: opacity 500ms ease;
+  }
+  #loading.done { opacity: 0; pointer-events: none; }
+  .loading-inner { width: 220px; text-align: center; }
+  .loading-label { font-size: 10px; letter-spacing: 0.26em; color: var(--dim); }
+  .loading-count {
+    margin-top: 8px; font-size: 12px; letter-spacing: 0.14em; color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+  .loading-track {
+    margin-top: 14px; height: 1px; background: var(--hairline); position: relative;
+  }
+  .loading-fill {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: var(--accent); transition: width 200ms ease;
+  }
+
+  @media (max-width: 600px) {
+    .hud-top { padding: 14px 16px; }
+    .counter .value { font-size: 18px; }
+    .hint { bottom: 48px; gap: 10px; padding: 9px 14px; font-size: 9px; }
+    .brand { bottom: 14px; right: 16px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="hud hud-top">
+  <div class="title-block">
+    <div class="name">FIREWOOD</div>
+    <div class="sub">A SCREEN TOY</div>
+  </div>
+  <div class="counter">
+    <div class="label">SPLITS</div>
+    <div class="value" id="split-count">0000</div>
+  </div>
+</div>
+
+<div class="hud hint" id="hint">
+  <span>DRAG TO ROTATE</span>
+  <span class="sep">/</span>
+  <span class="accent">TAP TO SPLIT</span>
+</div>
+
+<div class="hud brand">
+  <img src="./assets/klinekraft_logo_white.png" alt="" onerror="this.parentElement.style.display='none'" />
+</div>
+
+<div id="loading">
+  <div class="loading-inner">
+    <div class="loading-label">LOADING ASSETS</div>
+    <div class="loading-count" id="loading-count">0 / 0</div>
+    <div class="loading-track"><div class="loading-fill" id="loading-fill"></div></div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+
+/* ------------------------------------------------ scene */
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x06090c);
+scene.fog = new THREE.FogExp2(0x06090c, 0.105);
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 60);
+camera.position.set(2.6, 1.7, 3.6);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.75, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.enablePan = false;
+controls.minDistance = 2.2;
+controls.maxDistance = 7.5;
+controls.minPolarAngle = 0.35;
+controls.maxPolarAngle = 1.5;
+
+/* ------------------------------------------------ light */
+
+scene.add(new THREE.HemisphereLight(0x37526b, 0x0c0f0a, 0.55));
+
+const sun = new THREE.DirectionalLight(0xffd2a0, 2.4);
+sun.position.set(3.5, 5, 2.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -4; sun.shadow.camera.right = 4;
+sun.shadow.camera.top = 4; sun.shadow.camera.bottom = -4;
+sun.shadow.camera.far = 16;
+sun.shadow.bias = -0.0006;
+scene.add(sun);
+
+const rim = new THREE.DirectionalLight(0x6ea4c4, 0.7);
+rim.position.set(-4, 2.5, -3);
+scene.add(rim);
+
+/* ------------------------------------------------ loading */
+
+const manager = new THREE.LoadingManager();
+const countEl = document.getElementById('loading-count');
+const fillEl = document.getElementById('loading-fill');
+manager.onProgress = (url, loaded, total) => {
+  countEl.textContent = `${loaded} / ${total}`;
+  fillEl.style.width = (loaded / total * 100) + '%';
+};
+manager.onLoad = () => {
+  document.getElementById('loading').classList.add('done');
+  setTimeout(() => document.getElementById('hint').classList.add('show'), 600);
+};
+
+const texLoader = new THREE.TextureLoader(manager);
+const gltfLoader = new GLTFLoader(manager);
+gltfLoader.setMeshoptDecoder(MeshoptDecoder);
+
+/* ------------------------------------------------ ground */
+
+function groundTex(url, srgb) {
+  const t = texLoader.load(url);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(6, 6);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+const groundMat = new THREE.MeshStandardMaterial({
+  map: groundTex('./assets/ground_diff_2k.jpg', true),
+  normalMap: groundTex('./assets/ground_normal_2k.jpg'),
+  roughnessMap: groundTex('./assets/ground_rough_2k.jpg'),
+  normalScale: new THREE.Vector2(1.2, 1.2),
+});
+const ground = new THREE.Mesh(new THREE.CircleGeometry(22, 48), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* ------------------------------------------------ model helpers */
+
+function loadModel(url) {
+  return new Promise((resolve, reject) => {
+    gltfLoader.load(url, g => {
+      g.scene.traverse(o => {
+        if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+      });
+      resolve(g.scene);
+    }, undefined, reject);
+  });
+}
+
+/* Wrap a model so the group origin sits at the bottom-center of its
+   bounding box, scaled so its height equals targetH. */
+function standUp(model, preRotation, targetH, maxW) {
+  if (preRotation) model.rotation.copy(preRotation);
+  const wrap = new THREE.Group();
+  wrap.add(model);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  let s = targetH / size.y;
+  if (maxW) s = Math.min(s, maxW / Math.max(size.x, size.z));
+  model.scale.setScalar(s);
+  box.setFromObject(model);
+  const center = box.getCenter(new THREE.Vector3());
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= box.min.y;
+  return wrap;
+}
+
+/* ------------------------------------------------ constants */
+
+const STUMP_H = 0.55;
+const LOG_H = 0.62;
+const HALF_H = 0.58;
+const GRAVITY = -9.8;
+const MAX_PIECES = 14;
+
+/* ------------------------------------------------ build scene */
+
+let stump, log, axeGroup, halfProtoA, halfProtoB;
+const pieces = [];
+
+const [stumpRaw, logRaw, axeRaw, halfARaw, halfBRaw] = await Promise.all([
+  loadModel('./assets/stump.glb'),
+  loadModel('./assets/log.glb'),
+  loadModel('./assets/axe.glb'),
+  loadModel('./assets/half_a.glb'),
+  loadModel('./assets/half_b.glb'),
+]);
+
+/* stump: authored upright (cylinder axis Y) */
+stump = standUp(stumpRaw, null, STUMP_H);
+scene.add(stump);
+
+/* log: authored with cylinder axis on Z — rotate to vertical */
+log = standUp(logRaw, new THREE.Euler(-Math.PI / 2, 0, 0), LOG_H, 0.85);
+log.position.y = STUMP_H - 0.02;
+scene.add(log);
+
+/* split halves: authored lying along X.
+   half A's flat face points +Y, half B's points -Y.
+   Stand them on end (long axis vertical), flat faces inward. */
+halfProtoA = standUp(halfARaw, new THREE.Euler(0, 0, -Math.PI / 2), HALF_H); // flat face -> +X
+halfProtoB = standUp(halfBRaw, new THREE.Euler(0, 0, -Math.PI / 2), HALF_H); // flat face -> -X
+
+/* axe: handle along Y, head at +Y. Pivot at handle butt for the swing. */
+axeGroup = new THREE.Group();
+{
+  const inner = standUp(axeRaw, null, 1.05);
+  axeGroup.add(inner);
+  axeGroup.position.set(1.12, STUMP_H + 0.12, 0.28);
+  axeGroup.rotation.set(0, -0.35, 0.32); /* rest: held upright at the side */
+}
+scene.add(axeGroup);
+
+/* ------------------------------------------------ audio (procedural) */
+
+let actx = null;
+function ensureAudio() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
+}
+function playThunk() {
+  if (!actx) return;
+  const t = actx.currentTime;
+  /* low body */
+  const osc = actx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(95, t);
+  osc.frequency.exponentialRampToValueAtTime(38, t + 0.12);
+  const og = actx.createGain();
+  og.gain.setValueAtTime(0.5, t);
+  og.gain.exponentialRampToValueAtTime(0.001, t + 0.18);
+  osc.connect(og).connect(actx.destination);
+  osc.start(t); osc.stop(t + 0.2);
+  /* crack */
+  const len = actx.sampleRate * 0.07;
+  const buf = actx.createBuffer(1, len, actx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2);
+  const src = actx.createBufferSource();
+  src.buffer = buf;
+  const bp = actx.createBiquadFilter();
+  bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.8;
+  const ng = actx.createGain();
+  ng.gain.setValueAtTime(0.35, t);
+  ng.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
+  src.connect(bp).connect(ng).connect(actx.destination);
+  src.start(t);
+}
+function playDrop() {
+  if (!actx) return;
+  const t = actx.currentTime;
+  const osc = actx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(70, t);
+  osc.frequency.exponentialRampToValueAtTime(45, t + 0.07);
+  const g = actx.createGain();
+  g.gain.setValueAtTime(0.12, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + 0.1);
+  osc.connect(g).connect(actx.destination);
+  osc.start(t); osc.stop(t + 0.11);
+}
+
+/* ------------------------------------------------ physics pieces */
+
+const chipGeo = new THREE.BoxGeometry(0.045, 0.018, 0.09);
+const chipMat = new THREE.MeshStandardMaterial({ color: 0xb89868, roughness: 0.9 });
+
+function spawnPiece(obj, pos, vel, angVel, isChip) {
+  obj.position.copy(pos);
+  obj.userData.vel = vel;
+  obj.userData.angVel = angVel;
+  obj.userData.radius = isChip ? 0.03 : HALF_H * 0.28;
+  obj.userData.restY = isChip ? 0.02 : HALF_H * 0.26;
+  obj.userData.asleep = false;
+  obj.userData.born = clock.elapsedTime;
+  obj.userData.chip = !!isChip;
+  obj.userData.bounced = false;
+  scene.add(obj);
+  pieces.push(obj);
+  /* cap scene population */
+  const solid = pieces.filter(p => !p.userData.chip);
+  if (solid.length > MAX_PIECES) {
+    const oldest = solid[0];
+    fadeOut(oldest);
+  }
+}
+
+function fadeOut(obj) {
+  obj.userData.fading = clock.elapsedTime;
+}
+
+function splitLog() {
+  const base = new THREE.Vector3(0, STUMP_H, 0);
+  const dir = Math.random() * Math.PI * 2;
+  for (let i = 0; i < 2; i++) {
+    const proto = i === 0 ? halfProtoA : halfProtoB;
+    const half = proto.clone();
+    const side = i === 0 ? 1 : -1;
+    half.rotation.y = dir + (i === 0 ? 0 : Math.PI);
+    const out = new THREE.Vector3(Math.cos(dir) * side, 0, Math.sin(dir) * side);
+    spawnPiece(
+      half,
+      base.clone().add(out.clone().multiplyScalar(0.12)).add(new THREE.Vector3(0, 0.05, 0)),
+      out.multiplyScalar(2.1 + Math.random() * 1.0).add(new THREE.Vector3(0, 2.4 + Math.random() * 0.6, 0)),
+      new THREE.Vector3((Math.random() - 0.5) * 7, (Math.random() - 0.5) * 4, (Math.random() - 0.5) * 7)
+    );
+  }
+  /* wood chips */
+  for (let i = 0; i < 9; i++) {
+    const chip = new THREE.Mesh(chipGeo, chipMat.clone());
+    chip.castShadow = true;
+    const a = Math.random() * Math.PI * 2;
+    spawnPiece(
+      chip,
+      base.clone().add(new THREE.Vector3(0, LOG_H * 0.5, 0)),
+      new THREE.Vector3(Math.cos(a) * (1 + Math.random() * 1.6), 1.8 + Math.random() * 1.8, Math.sin(a) * (1 + Math.random() * 1.6)),
+      new THREE.Vector3((Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16, (Math.random() - 0.5) * 16),
+      true
+    );
+    fadeOut(chip);
+  }
+}
+
+/* ------------------------------------------------ axe swing state */
+
+let swing = { state: 'idle', t: 0 };
+const REST = { y: -0.35, z: 0.32 };
+const WIND = { y: -0.25, z: 1.45 };
+const STRIKE = { y: -0.05, z: -0.5 };
+const easeIn = t => t * t * t;
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeOutBack = t => 1 + 2.7 * Math.pow(t - 1, 3) + 1.7 * Math.pow(t - 1, 2);
+
+function chop() {
+  if (swing.state === 'idle' || swing.state === 'return') {
+    swing = { state: 'windup', t: 0 };
+  }
+}
+
+let shake = 0;
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+let splits = 0;
+const countDisplay = document.getElementById('split-count');
+function bumpCounter() {
+  splits++;
+  countDisplay.textContent = String(splits).padStart(4, '0');
+  countDisplay.classList.add('flash');
+  setTimeout(() => countDisplay.classList.remove('flash'), 180);
+}
+
+let logState = 'ready'; /* ready | gone | spawning */
+let respawnAt = 0;
+
+function onImpact() {
+  if (logState === 'ready') {
+    log.visible = false;
+    logState = 'gone';
+    respawnAt = clock.elapsedTime + 0.55;
+    splitLog();
+    bumpCounter();
+    playThunk();
+    if (!reducedMotion) shake = 1;
+  } else {
+    playDrop(); /* hit the empty block */
+  }
+}
+
+/* ------------------------------------------------ input */
+
+let downPos = null;
+renderer.domElement.addEventListener('pointerdown', e => {
+  downPos = [e.clientX, e.clientY];
+  ensureAudio();
+  document.getElementById('hint').classList.remove('show');
+});
+renderer.domElement.addEventListener('pointerup', e => {
+  if (!downPos) return;
+  const dx = e.clientX - downPos[0], dy = e.clientY - downPos[1];
+  if (dx * dx + dy * dy < 36) chop();
+  downPos = null;
+});
+
+/* ------------------------------------------------ loop */
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const now = clock.elapsedTime;
+
+  /* axe state machine */
+  if (swing.state === 'windup') {
+    swing.t += dt / 0.18;
+    const k = easeOut(Math.min(swing.t, 1));
+    axeGroup.rotation.z = REST.z + (WIND.z - REST.z) * k;
+    axeGroup.rotation.y = REST.y + (WIND.y - REST.y) * k;
+    if (swing.t >= 1) swing = { state: 'strike', t: 0 };
+  } else if (swing.state === 'strike') {
+    swing.t += dt / 0.11;
+    const k = easeIn(Math.min(swing.t, 1));
+    axeGroup.rotation.z = WIND.z + (STRIKE.z - WIND.z) * k;
+    axeGroup.rotation.y = WIND.y + (STRIKE.y - WIND.y) * k;
+    if (swing.t >= 1) { onImpact(); swing = { state: 'hold', t: 0 }; }
+  } else if (swing.state === 'hold') {
+    swing.t += dt / 0.07;
+    if (swing.t >= 1) swing = { state: 'return', t: 0 };
+  } else if (swing.state === 'return') {
+    swing.t += dt / 0.4;
+    const k = easeOut(Math.min(swing.t, 1));
+    axeGroup.rotation.z = STRIKE.z + (REST.z - STRIKE.z) * k;
+    axeGroup.rotation.y = STRIKE.y + (REST.y - STRIKE.y) * k;
+    if (swing.t >= 1) swing = { state: 'idle', t: 0 };
+  }
+
+  /* log respawn */
+  if (logState === 'gone' && now >= respawnAt) {
+    logState = 'spawning';
+    log.visible = true;
+    log.scale.setScalar(0.001);
+    log.userData.spawnT = 0;
+    playDrop();
+  }
+  if (logState === 'spawning') {
+    log.userData.spawnT += dt / 0.3;
+    const k = Math.min(log.userData.spawnT, 1);
+    log.scale.setScalar(Math.max(easeOutBack(k), 0.001));
+    if (k >= 1) { log.scale.setScalar(1); logState = 'ready'; }
+  }
+
+  /* piece physics */
+  for (let i = pieces.length - 1; i >= 0; i--) {
+    const p = pieces[i];
+    const u = p.userData;
+    if (!u.asleep) {
+      u.vel.y += GRAVITY * dt;
+      p.position.addScaledVector(u.vel, dt);
+      p.rotation.x += u.angVel.x * dt;
+      p.rotation.y += u.angVel.y * dt;
+      p.rotation.z += u.angVel.z * dt;
+      const rad = Math.hypot(p.position.x, p.position.z);
+      const floorY = rad < 0.62 ? STUMP_H : 0;
+      if (p.position.y < floorY + u.restY) {
+        p.position.y = floorY + u.restY;
+        if (Math.abs(u.vel.y) > 0.6) {
+          u.vel.y *= -0.38;
+          u.vel.x *= 0.6; u.vel.z *= 0.6;
+          u.angVel.multiplyScalar(0.55);
+          if (!u.bounced && !u.chip) { playDrop(); u.bounced = true; }
+        } else {
+          u.vel.set(0, 0, 0);
+          u.angVel.multiplyScalar(0.8);
+          if (u.angVel.length() < 0.3) {
+            u.asleep = true;
+            if (!u.chip) {
+              /* settle flat-ish: stop all spin */
+              u.angVel.set(0, 0, 0);
+            }
+          }
+        }
+      }
+    }
+    /* fading removal */
+    if (u.fading !== undefined) {
+      const age = now - u.fading;
+      const life = u.chip ? 2.2 : 1.4;
+      if (age > life) {
+        const k = 1 - Math.min((age - life) / 0.6, 1);
+        p.traverse(o => {
+          if (o.isMesh) {
+            o.material.transparent = true;
+            o.material.opacity = k;
+          }
+        });
+        if (k <= 0) {
+          scene.remove(p);
+          pieces.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  /* camera shake */
+  if (shake > 0.01) {
+    shake *= Math.pow(0.0001, dt);
+    camera.position.x += (Math.random() - 0.5) * 0.02 * shake;
+    camera.position.y += (Math.random() - 0.5) * 0.02 * shake;
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
